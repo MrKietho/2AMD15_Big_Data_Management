@@ -30,7 +30,7 @@ def q1b(spark_context: SparkContext, on_server: bool) -> RDD:
     vectors_file_path = "/vectors.csv" if on_server else "vectors.csv"
 
     # create rdd
-    rdd1 = spark_context.textFile(vectors_file_path).map(lambda line: tuple(line.split(',')))
+    rdd1 = spark_context.textFile(vectors_file_path).map(lambda line: tuple(line.split(';')))
 
     return rdd1
 
