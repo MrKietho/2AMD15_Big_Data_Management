@@ -1,6 +1,6 @@
 
 Q3 TODO ("simpele" methode:
-- Geneer alle mogelijke tuples van 3 vectors, gebruik makend van de vector IDs (dus <GHAE, G7F3, KAW1> bijvoorbeeld als 1 tuple)
+- Genereer alle mogelijke tuples van 3 vectors, gebruik makend van de vector IDs (dus <GHAE, G7F3, KAW1> bijvoorbeeld als 1 tuple)
 - Bereken voor elke tuple aan vectors de aggregate vector
 - Bereken voor elke tuple aan vectors de aggregate variance
 - Beslis welke tuples de threshold tau halen
