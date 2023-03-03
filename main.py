@@ -1,7 +1,7 @@
 from pyspark import SparkConf, SparkContext, RDD
 from pyspark.sql import SparkSession, DataFrame
-from pyspark.sql.functions import variance
-from pyspark.sql.functions import udf
+from pyspark.sql.functions import col, array
+from pyspark.sql.functions import udf, split
 from pyspark.sql.types import ArrayType, DoubleType
 import numpy as np
 
@@ -10,6 +10,8 @@ def get_spark_context(on_server) -> SparkContext:
     if not on_server:
         spark_conf = spark_conf.setMaster("local[*]")
     spark_context = SparkContext.getOrCreate(spark_conf)
+
+    spark_context.setLogLevel("ERROR") # Remove
 
     if on_server:
         # TODO: You may want to change ERROR to WARN to receive more info. For larger data sets, to not set the
@@ -46,6 +48,15 @@ def q1b(spark_context: SparkContext, on_server: bool) -> RDD:
 
     return rdd1
 
+# Define a custom aggregation function that sums the values of three arrays
+def my_agg(arr1, arr2, arr3):
+    for i in range(len(arr1)):
+      arr1[i] = arr1[i] + arr2[i] + arr3[i]
+    return arr1
+
+# Register the UDF with Spark
+my_agg_udf = udf(my_agg, ArrayType(DoubleType()))
+
 
 def q2(spark_context: SparkContext, data_frame: DataFrame, tau: float):
     spark_session = SparkSession(spark_context)
@@ -54,13 +65,15 @@ def q2(spark_context: SparkContext, data_frame: DataFrame, tau: float):
 
     # SQL query to select all possible triples of vectors and calculate their aggregate variance
     result = (
-        data_frame.alias("v1").crossJoin(data_frame.alias("v2"))
+        data_frame.alias("v1")
+        .crossJoin(data_frame.alias("v2"))
         .crossJoin(data_frame.alias("v3"))
         .filter("v1._c0 < v2._c0 AND v2._c0 < v3._c0")
-        .select("v1._c0", "v2._c0", "v3._c0",
-                variance(sum("v1.vectors", "v2.vectors", "v3.vectors")).alias("var_agg"))
-        .groupBy("v1._c0", "v2._c0", "v3._c0")
-        .having(f"var_agg <= {tau}")
+        .limit(20)
+        .select("v1._c0", "v2._c0", "v3._c0", "v1.vectors", "v2.vectors", "v3.vectors", 
+                my_agg_udf(col("v1.vectors"), col("v2.vectors"), col("v3.vectors")).alias("var_agg"))
+        # .groupBy("v1._c0", "v2._c0", "v3._c0")
+        # .having(f"var_agg <= {tau}")
     )
 
     result.show()
