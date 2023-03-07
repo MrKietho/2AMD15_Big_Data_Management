@@ -2,7 +2,7 @@ from pyspark import SparkConf, SparkContext, RDD
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql.functions import col, array
 from pyspark.sql.functions import udf, split
-from pyspark.sql.types import ArrayType, DoubleType
+from pyspark.sql.types import ArrayType, DoubleType, FloatType
 import numpy as np
 
 def get_spark_context(on_server) -> SparkContext:
@@ -52,10 +52,10 @@ def q1b(spark_context: SparkContext, on_server: bool) -> RDD:
 def my_agg(arr1, arr2, arr3):
     for i in range(len(arr1)):
       arr1[i] = arr1[i] + arr2[i] + arr3[i]
-    return arr1
+    return float(((1 / len(arr1)) * sum(x*x for x in arr1)) - np.power(sum(x/len(arr1) for x in arr1), 2))
 
 # Register the UDF with Spark
-my_agg_udf = udf(my_agg, ArrayType(DoubleType()))
+my_agg_udf = udf(my_agg, FloatType())
 
 
 def q2(spark_context: SparkContext, data_frame: DataFrame, tau: float):
@@ -70,10 +70,10 @@ def q2(spark_context: SparkContext, data_frame: DataFrame, tau: float):
         .crossJoin(data_frame.alias("v3"))
         .filter("v1._c0 < v2._c0 AND v2._c0 < v3._c0")
         .limit(20)
-        .select("v1._c0", "v2._c0", "v3._c0", "v1.vectors", "v2.vectors", "v3.vectors", 
+        .select("v1._c0", "v2._c0", "v3._c0", 
                 my_agg_udf(col("v1.vectors"), col("v2.vectors"), col("v3.vectors")).alias("var_agg"))
         # .groupBy("v1._c0", "v2._c0", "v3._c0")
-        # .having(f"var_agg <= {tau}")
+        .filter(f"var_agg <= {tau}")
     )
 
     result.show()
@@ -100,7 +100,7 @@ if __name__ == '__main__':
 
     rdd = q1b(spark_context, on_server)
 
-    result = q2(spark_context, data_frame, 40)
+    result = q2(spark_context, data_frame, 410)
 
     result.show()
 
