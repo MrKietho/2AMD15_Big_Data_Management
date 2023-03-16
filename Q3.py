@@ -13,6 +13,7 @@ import numpy as np
 
 # Methods to calculate covariance and aggregate variance
 mean = lambda x: sum([i for i in x]) / len(x)
+variance = lambda x: sum([pow(i - mean(x), 2) for i in x]) / (len(x) - 1)
 covariance = lambda x, y: sum( [ (x[i] - mean(x)) * (y[i] - mean(y)) for i in range(len(x)) ] ) / (len(x) - 1)
 agg_variance = lambda x, y, z: covariances[(x, x)] + covariances[(y, y)] + covariances[(z, z)] + 2 * covariances[(x, y)] + 2 * covariances[(x, z)] + 2 * covariances[(y, z)]
 
@@ -33,16 +34,21 @@ vector_ids = list(vectors.keys())
 vector_pairs = list(combinations(vector_ids, 2)) + [(x, x) for x in vector_ids]
 
 # Calculate covariance matrix for all pairs of vectors
-covariance_values = np.cov([vectors[x] for x in vector_ids])
+# covariance_values = np.cov([vectors[x] for x in vector_ids])
+covariances = sc.parallelize(vector_pairs).map(lambda x: (x, covariance(vectors[x[0]], vectors[x[1]]))).collectAsMap()
 
 # Create a dictionary of covariances
-covariances = {(vector_ids[i], vector_ids[j]): covariance_values[i][j] for i in range(len(vector_ids)) for j in range(len(vector_ids))}
+# covariances = {(vector_ids[i], vector_ids[j]): covariance_values[i][j] for i in range(len(vector_ids)) for j in range(len(vector_ids))}
 
 # Create a list of all triplets of vectors
 vector_triples = list(combinations(vector_ids, 3))
+# vector_triples = [((x[0], x[1], x[2]), [vectors[x[0]][i] + vectors[x[1]][i] + vectors[x[2]][i] for i in range(len(vectors[x[0]]))]) for x in vector_triples]
 
 # Calculate aggregate variance for each triplet and filter triplets with aggregate variance less than or equal to threshold
 result = sc.parallelize(vector_triples).map(lambda x: ((x[0], x[1], x[2]), agg_variance(x[0], x[1], x[2]))).filter(lambda x: x[1] <= threshold).collect()
+
+# result = sc.parallelize(vector_triples).map(lambda x: (x, [vectors[x[0]][i] + vectors[x[1]][i] + vectors[x[2]][i] for i in range(len(vectors[x[0]]))])).mapValues(lambda x: variance(x)).filter(lambda x: x[1] <= threshold).collect()
+# result = sc.parallelize(vector_triples).mapValues(lambda x: variance(x)).filter(lambda x: x[1] <= threshold).collect()
 
 print(result)
 
