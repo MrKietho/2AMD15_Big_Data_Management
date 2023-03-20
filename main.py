@@ -73,8 +73,49 @@ def q3(spark_context: SparkContext, rdd: RDD):
     return
 
 
-def q4(spark_context: SparkContext, rdd: RDD):
-    # TODO: Imlement Q4 here
+# def q4(spark_context: SparkContext, rdd: RDD):
+def q4(spark_context: SparkContext):
+    from pyspark.ml.feature import CountVectorizer
+
+    # Initialize Spark
+    conf = SparkConf().setAppName("Count-Min Sketch").setMaster("local")
+    sc = SparkContext.getOrCreate(conf)
+
+    # TODO change 250 vectors
+    # Create a set of 250 random vectors
+    vectors = sc.parallelize([np.random.rand(10) for i in range(250)])
+
+    # Convert each vector to a hash value using MurmurHash
+    hashes = vectors.map(lambda v: hash(str(v)))
+
+    # Create a Count-Min Sketch with 10 hash functions and 1000 hash table sizes
+    sketch = CountVectorizer(inputCol="hashes", outputCol="counts", vocabSize=1000, minDF=2)
+
+    hashes_df = hashes.toDF("hashes")
+
+    # Fit the sketch to the hashes
+    model = sketch.fit(hashes_df)
+
+    # # Transform the hashes to counts using the sketch
+    # counts = model.transform(hashes_df)
+
+    # # Compute the approximate variance for each vector
+    # mean = vectors.mean()
+    # sum_squares = counts.rdd.map(lambda row: np.sum(np.square(vectors.filter(lambda v: hash(str(v)) == row["hashes"]).collect()[0] - mean)) * row["counts"]).sum()
+    # approx_variances = counts.rdd.map(lambda row: (row["hashes"], np.sum(np.square(vectors.filter(lambda v: hash(str(v)) == row["hashes"]).collect()[0] - mean)) * row["counts"] / sum_squares)).collect()
+
+    # # Compute the approximate aggregate variance for each triple of vectors
+    # triples = vectors.cartesian(vectors).cartesian(vectors).filter(lambda triple: triple[0][0] != triple[0][1] and triple[0][0] != triple[1] and triple[0][1] != triple[1] and triple[0][0] < triple[0][1] and triple[0][1] < triple[1]).map(lambda triple: (triple, (triple[0][0], triple[0][1], triple[1], np.sum(triple[0][0]) + np.sum(triple[0][1]) + np.sum(triple[1]), len(triple[0][0]) + len(triple[0][1]) + len(triple[1]), np.sum([approx_variance[1] for approx_variance in approx_variances if approx_variance[0] in [hash(str(v)) for v in triple[0] + (triple[1],)]]))))
+    # lower_variances = triples.filter(lambda triple: triple[1][5] < 0.1).map(lambda triple: triple[1][0:3]).collect()
+    # higher_variances = triples.filter(lambda triple: triple[1][5] > 0.9).map(lambda triple: triple[1][0:3]).collect()
+
+    # print("Triples with lower variances:")
+    # for triple in lower_variances:
+    #     print(triple)
+
+    # print("Triples with higher variances:")
+    # for triple in higher_variances:
+    #     print(triple)
     return
 
 
@@ -87,12 +128,13 @@ if __name__ == '__main__':
 
     rdd = q1b(spark_context, on_server)
 
-    result = q2(spark_context, data_frame, 40)
+    # result = q2(spark_context, data_frame, 40)
 
-    result.show()
+    # result.show()
 
     #q3(spark_context, rdd)
 
     #q4(spark_context, rdd)
+    #q4(spark_context)
 
     spark_context.stop()
