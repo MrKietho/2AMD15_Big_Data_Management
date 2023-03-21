@@ -118,9 +118,8 @@ def q2(spark_context: SparkContext, data_frame: DataFrame, tau: float):
 
     return result6
 
-
 def q3(spark_context: SparkContext, rdd: RDD, tau: float):
-    n = 4
+    n = 10000
 
     # Compute the mean of each vector
     def mean(v):
@@ -128,34 +127,130 @@ def q3(spark_context: SparkContext, rdd: RDD, tau: float):
 
     # Compute the variance of each vector
     def variance(v, m):
-        return sum([(x - m) ** 2 for x in v]) / len(v)
+        value = 0
+        for i in range(len(v)):
+            value += v[i] * v[i]
+        return (value / n) - (m*m)
 
     def cov(tuple1, tuple2):
         vec1 = tuple1[0]
         vec2 = tuple2[0]
         avg1 = tuple1[1]
-        avg2 = tuple2[2]
+        avg2 = tuple2[1]
 
-        covariance = 0
-        for t, x in enumerate(vec1):
-            covariance += vec1[t] * vec2[t]
-        return covariance/n + avg1 * avg2
+        value = 0
+
+        for i in range(len(vec1)):
+            value += vec1[i]*vec2[i]
+
+        return (value/n) - (avg1 * avg2)
 
     def variance_triple(var1, var2, var3, cov1, cov2, cov3):
         return var1 + var2 + var3 + 2*(cov1 + cov2 + cov3)
 
-    # Compute rdd with variance and mean for all vectors
+    # Broadcast original RDD, so that we can access the vectors later at every node
+    vector_broadcast = spark_context.broadcast(rdd.collectAsMap())
+
+    # Compute rdd with ID, mean and variance (drop the vector)
     mean_rdd = rdd.map(lambda x: (x[0], (x[1], mean(x[1]))))
-    variance_rdd = mean_rdd.map(lambda x: (x[0], (x[1][0], variance(x[1][0], x[1][1]), x[1][1]))).cache()
+    variance_rdd = mean_rdd.map(lambda x: (x[0], (variance(x[1][0], x[1][1]), x[1][1]))).cache()
 
-    # Join the RDD with itself to create all pairs of vectors
-    pairs_rdd = variance_rdd.cartesian(variance_rdd).filter(lambda x: x[0][0] < x[1][0])
+    # Create all unique pairs by computing cartesian product on variance rdd
+    id_pairs = variance_rdd.cartesian(variance_rdd).filter(lambda x: x[0] < x[1])
 
-    #Add the covariance to the rdd -- ((X), (Y, varX, varY, covXY))
-    cov_rdd = pairs_rdd.map(lambda x: ((x[0][0]), (x[1][0], x[0][1][1], x[1][1][1], cov(x[0][1], x[1][1]))))
+    # Compute covariance for all the pairs using the broadcasted vectors
+    cov_rdd = id_pairs.map(lambda x: ((x[0][0]), (x[1][0], x[0][1][0], x[1][1][0], cov((vector_broadcast.value.get(x[0][0]), x[0][1][1]), (vector_broadcast.value.get(x[1][0]), x[1][1][1]))))).cache()
+
+    # Create all triples -- ((X), (Y, varX, varY, covXY), (Z, varX, varZ, covXZ))
+    triple_rdd = cov_rdd.join(cov_rdd).filter(lambda x: x[1][0][0] < x[1][1][0])
+
+    # Make sure all covariances are in the triples
+    triple_cov = cov_rdd.map(lambda x: ((x[0], x[1][0]), x[1][3]))
+    triple_rdd2 = triple_rdd.map(lambda x: ((x[1][0][0], x[1][1][0]), ((x[0], x[1][0][1], x[1][0][2], x[1][1][2]), (x[1][0][3], x[1][1][3]))))
+    triple_complete_rdd = triple_rdd2.join(triple_cov)
+
+    # Compute variance
+    final1_result = triple_complete_rdd.map(lambda x: ((x[0][0], x[0][1], x[1][0][0][0]), (variance_triple(x[1][0][0][1], x[1][0][0][2], x[1][0][0][3], x[1][0][1][0], x[1][0][1][1], x[1][1])))).cache()
+
+    # Filter for tau
+    final_result = final1_result.filter(lambda x: x[1] <= tau)
+
+    x=0
+    for element in final_result.collect():
+        if x < 10:
+            print(element)
+            x+=1
+
+    return
 
 
-    # Create all tripples -- ((X), (Y, varX, varY, covXY), (Z, varX, varZ, covXZ))
+def q4(spark_context: SparkContext, rdd: RDD, tau: float):
+    n = 10000
+    depth = 15
+    width = 250
+
+    # Compute the mean of each vector
+    def mean(v):
+        return sum(v) / n
+
+    # Compute the variance of each vector
+    def variance(v, m):
+        value = 0
+        for i in range(len(v)):
+            value += v[i]*v[i]
+        return (value / n) - (m*m)
+
+    def cov(tuple1, tuple2):
+        sketch1 = tuple1[0]
+        sketch2 = tuple2[0]
+        avg1 = tuple1[1]
+        avg2 = tuple2[1]
+
+        values = []
+
+        for i in range(depth):
+            value = 0
+            for j in range(width):
+                value += sketch1[i][j]*sketch2[i][j]
+            values.append(value)
+
+        exp_xy = min(values)
+
+        return (exp_xy/n) - (avg1 * avg2)
+
+    def variance_triple(var1, var2, var3, cov1, cov2, cov3):
+        return var1 + var2 + var3 + 2*(cov1 + cov2 + cov3)
+
+    def vector_to_cms(vector):
+        # Initialize the count min sketch with zeros.
+        count_min_sketch = np.zeros((depth, width))
+
+
+        # For each non-zero element in the vector, update the count min sketch.
+        for i in range(len(vector)):
+            value = vector[i]
+
+            for j in range(depth):
+                hash_value = hash(str(i) + str(j)) % width
+                count_min_sketch[j][hash_value] += value
+
+        return count_min_sketch
+
+    # Broadcast original RDD, so that we can access the vectors later at every node
+    sketch_rdd = rdd.map(lambda x: (x[0], vector_to_cms(x[1])))
+    sketch_broadcast = spark_context.broadcast(sketch_rdd.collectAsMap())
+
+    # Compute rdd with ID, mean and variance (drop the vector)
+    mean_rdd = rdd.map(lambda x: (x[0], (x[1], mean(x[1]))))
+    variance_rdd = mean_rdd.map(lambda x: (x[0], (variance(x[1][0], x[1][1]), x[1][1]))).cache()
+
+    # Create all unique pairs by computing cartesian product on variance rdd
+    id_pairs = variance_rdd.cartesian(variance_rdd).filter(lambda x: x[0] < x[1])
+
+    # Compute covariance for all the pairs using the broadcasted vectors
+    cov_rdd = id_pairs.map(lambda x: ((x[0][0]), (x[1][0], x[0][1][0], x[1][1][0], cov((sketch_broadcast.value.get(x[0][0]), x[0][1][1]), (sketch_broadcast.value.get(x[1][0]), x[1][1][1]))))).cache()
+
+    # Create all triples -- ((X), (Y, varX, varY, covXY), (Z, varX, varZ, covXZ))
     triple_rdd = cov_rdd.join(cov_rdd).filter(lambda x: x[1][0][0] < x[1][1][0])
 
     # Make sure all cov are in the triples
@@ -165,17 +260,16 @@ def q3(spark_context: SparkContext, rdd: RDD, tau: float):
     triple_complete_rdd = triple_rdd2.join(triple_cov)
 
     # Compute variance
-    final1_result = triple_complete_rdd.map(lambda x: ((x[0][0], x[0][1], x[1][0][0][0]), (variance_triple(x[1][0][0][1], x[1][0][0][2], x[1][0][0][3], x[1][0][1][0], x[1][0][1][1], x[1][1]))))
+    final1_result = triple_complete_rdd.map(lambda x: ((x[0][0], x[0][1], x[1][0][0][0]), (variance_triple(x[1][0][0][1], x[1][0][0][2], x[1][0][0][3], x[1][0][1][0], x[1][0][1][1], x[1][1])))).cache()
 
     # Filter for tau
     final_result = final1_result.filter(lambda x: x[1] <= tau)
 
-    print(final_result.count())
-
-    return
-
-
-def q4(spark_context: SparkContext, rdd: RDD):
+    x = 1
+    for element in final1_result.collect():
+        if x < 3:
+            print(element)
+            x+=1
 
     return
 
@@ -185,13 +279,14 @@ if __name__ == '__main__':
     on_server = False  # TODO: Set this to true if and only if deploying to the server
     spark_context = get_spark_context(on_server)
 
-    data_frame = q1a(spark_context, on_server)
-    result = q2(spark_context, data_frame, 410)
-    result.show()
+    # data_frame = q1a(spark_context, on_server)
+    # result = q2(spark_context, data_frame, 410)
+    # result.show()
 
     # rdd = q1b(spark_context, on_server)
-    # q3(spark_context, rdd, 29410)
+    # q3(spark_context, rdd, 410)
 
-    #q4(spark_context, rdd)
+    rdd = q1b(spark_context, on_server)
+    q4(spark_context, rdd, 20410)
 
     spark_context.stop()
