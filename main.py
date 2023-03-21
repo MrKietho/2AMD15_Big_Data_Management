@@ -68,7 +68,7 @@ def q2(spark_context: SparkContext, data_frame: DataFrame, tau: float):
         data_frame.withColumn("avg", expr("aggregate(vectors, cast(0 as double), (acc, x) -> acc + x)/10000"))
         .withColumn("sumsum", expr("aggregate(vectors, cast(0 as double), (acc, x) -> acc + x*x)"))
         .withColumn("variance", expr("sumsum/10000 - (avg*avg)"))
-        .select("_c0", "vectors", "avg", "variance")
+        .select("_c0", "avg", "vectors", "variance")
         .cache()
     )
 
@@ -81,11 +81,11 @@ def q2(spark_context: SparkContext, data_frame: DataFrame, tau: float):
 
     # Compute the covariance for all the combinations of vectors
     result2 = (
-        result1.withColumn("cov_arr", expr("transform(v1.vectors, (x, i) -> (v1.vectors[i] - v1.avg) * (v2.vectors[i] - v2.avg))"))
-        .withColumn("sum", expr("aggregate(cov_arr, cast(0 as double), (acc, x) -> acc + x)"))
-        .withColumn("cov", expr("sum/10000"))
-        .selectExpr("v1._c0 AS X", "v1.variance AS X_var", "v2._c0 AS Y", "v2.variance as Y_var", "cov")
-        .cache()
+         result1 .withColumn("cov_arr", expr("transform(v1.vectors, (x, i) -> v1.vectors[i] * v2.vectors[i])"))
+         .withColumn("sum", expr("aggregate(cov_arr, cast(0 as double), (acc, x) -> acc + x)"))
+         .withColumn("cov", expr("((sum/10000) - (v1.avg*v2.avg))"))
+         .selectExpr("v1._c0 AS X", "v1.variance AS X_var", "v2._c0 AS Y", "v2.variance as Y_var", "cov")
+         .cache()
     )
 
     # Create triples by combining pairs XY and YZ
@@ -133,13 +133,13 @@ def q3(spark_context: SparkContext, rdd: RDD, tau: float):
     def cov(tuple1, tuple2):
         vec1 = tuple1[0]
         vec2 = tuple2[0]
-        avg1 = tuple1[2]
+        avg1 = tuple1[1]
         avg2 = tuple2[2]
 
         covariance = 0
         for t, x in enumerate(vec1):
-            covariance += (vec1[t] - avg1) * (vec2[t] - avg2)
-        return covariance/n
+            covariance += vec1[t] * vec2[t]
+        return covariance/n + avg1 * avg2
 
     def variance_triple(var1, var2, var3, cov1, cov2, cov3):
         return var1 + var2 + var3 + 2*(cov1 + cov2 + cov3)
@@ -170,14 +170,13 @@ def q3(spark_context: SparkContext, rdd: RDD, tau: float):
     # Filter for tau
     final_result = final1_result.filter(lambda x: x[1] <= tau)
 
-    for element in final_result.collect():
-        print(element)
+    print(final_result.count())
 
     return
 
 
 def q4(spark_context: SparkContext, rdd: RDD):
-    # TODO: Imlement Q4 here
+
     return
 
 
@@ -190,8 +189,8 @@ if __name__ == '__main__':
     result = q2(spark_context, data_frame, 410)
     result.show()
 
-    #rdd = q1b(spark_context, on_server)
-    #q3(spark_context, rdd, 410)
+    # rdd = q1b(spark_context, on_server)
+    # q3(spark_context, rdd, 29410)
 
     #q4(spark_context, rdd)
 
