@@ -235,7 +235,10 @@ def q4(spark_context: SparkContext, rdd: RDD, tau: float, epsilon: float, delta:
     variance_rdd = id_triple.map(lambda x: ((x[0][0], x[0][1], x[1]), variance(sketch_broadcast.value.get(x[0][0]), sketch_broadcast.value.get(x[0][1]), sketch_broadcast.value.get(x[1])))).cache()
 
     # Filter for the right tau
-    tau_variance_rdd = variance_rdd.filter(lambda x:  x[1] <= tau) #if lower_than else x[1] >= tau)
+    if lower_than:
+        tau_variance_rdd = variance_rdd.filter(lambda x:  x[1] <= tau)
+    else:
+        tau_variance_rdd = variance_rdd.filter(lambda x: x[1] >= tau)
 
     for element in tau_variance_rdd.collect():
         print(element)
