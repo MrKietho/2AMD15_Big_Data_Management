@@ -23,13 +23,13 @@ def get_spark_context(on_server) -> SparkContext:
 
 
 def q1a(spark_context: SparkContext, on_server: bool) -> DataFrame:
-    vectors_file_path = "/vectors.csv" if on_server else "vectors.csv"
+    vectors_file_path_250 = "/vectors_250.csv" if on_server else "vectors_250.csv"
 
     spark_session = SparkSession(spark_context)
 
     df = (spark_session.read.format("csv")
           .option("header", "false")
-          .load(vectors_file_path)
+          .load(vectors_file_path_250)
           .withColumn("vectors", split("_c1", ";"))
           .select("_c0", "vectors")
           )
@@ -38,13 +38,17 @@ def q1a(spark_context: SparkContext, on_server: bool) -> DataFrame:
 
 
 def q1b(spark_context: SparkContext, on_server: bool) -> RDD:
-    vectors_file_path = "/vectors.csv" if on_server else "vectors.csv"
+    vectors_file_path_250 = "/vectors_250.csv" if on_server else "vectors_250.csv"
+    vectors_file_path_1000 = "/vectors_1000.csv" if on_server else "vectors_1000.csv"
 
-    # create rdd
-    rdd1 = spark_context.textFile(vectors_file_path) \
+    # create rdds
+    rdd_250 = spark_context.textFile(vectors_file_path_250) \
+        .map(lambda line: (line.split(',')[0], list(map(int, line.split(',')[1].split(';')))))
+        
+    rdd_1000 = spark_context.textFile(vectors_file_path_1000) \
         .map(lambda line: (line.split(',')[0], list(map(int, line.split(',')[1].split(';')))))
 
-    return rdd1
+    return rdd_250, rdd_1000
 
 # Define a custom aggregation function that sums the values of three arrays
 def my_agg(arr1):
@@ -130,6 +134,7 @@ def q3(spark_context: SparkContext, rdd: RDD, tau: float):
         value = 0
         for i in range(len(v)):
             value += v[i] * v[i]
+            
         return (value / n) - (m*m)
 
     def cov(tuple1, tuple2):
@@ -170,16 +175,12 @@ def q3(spark_context: SparkContext, rdd: RDD, tau: float):
     triple_complete_rdd = triple_rdd2.join(triple_cov)
 
     # Compute variance
-    final1_result = triple_complete_rdd.map(lambda x: ((x[0][0], x[0][1], x[1][0][0][0]), (variance_triple(x[1][0][0][1], x[1][0][0][2], x[1][0][0][3], x[1][0][1][0], x[1][0][1][1], x[1][1])))).cache()
+    final1_result = triple_complete_rdd.map(lambda x: ((x[0][0], x[0][1], x[1][0][0][0]), (variance_triple(x[1][0][0][1], x[1][0][0][2], x[1][0][0][3], x[1][0][1][0], x[1][0][1][1], x[1][1]))))
 
     # Filter for tau
     final_result = final1_result.filter(lambda x: x[1] <= tau)
 
-    x=0
-    for element in final_result.collect():
-        if x < 10:
-            print(element)
-            x+=1
+    print(final_result.collect())
 
     return
 
@@ -276,17 +277,17 @@ def q4(spark_context: SparkContext, rdd: RDD, tau: float):
 
 if __name__ == '__main__':
 
-    on_server = False  # TODO: Set this to true if and only if deploying to the server
+    on_server = True  # TODO: Set this to true if and only if deploying to the server
     spark_context = get_spark_context(on_server)
 
-    # data_frame = q1a(spark_context, on_server)
-    # result = q2(spark_context, data_frame, 410)
-    # result.show()
+    data_frame = q1a(spark_context, on_server)
+    result = q2(spark_context, data_frame, 410)
+    result.show()
 
-    # rdd = q1b(spark_context, on_server)
-    # q3(spark_context, rdd, 410)
+    _, rdd = q1b(spark_context, on_server)
+    q3(spark_context, rdd, 410)
 
-    rdd = q1b(spark_context, on_server)
-    q4(spark_context, rdd, 20410)
+    # rdd, _ = q1b(spark_context, on_server)
+    # q4(spark_context, rdd, 20410)
 
     spark_context.stop()
