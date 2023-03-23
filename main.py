@@ -134,7 +134,7 @@ def q4(spark_context: SparkContext, rdd: RDD, tau: float, epsilon: float, delta:
     def variance(sketch1, sketch2, sketch3):
         sketch = np.add(np.add(sketch1, sketch2), sketch3)
         arr_x2 = []
-        x = np.sum(sketch)
+        x = 0
 
         for i in range(depth):
             x += sum(sketch[i])
