@@ -203,20 +203,21 @@ def q4(spark_context: SparkContext, rdd: RDD, tau: float, epsilon: float, delta:
 
         return count_min_sketch
 
-    collision_sketch = vector_to_cms(np.ones(n))
+    def sum_sketch(sketch1, sketch2):
+        return np.add(sketch1, sketch2)
 
-    def variance(sketch1, sketch2, sketch3):
-        sketch = np.add(np.add(sketch1, sketch2), sketch3)
+
+    def variance(sketch1, sketch2):
+        sketch = np.add(sketch1, sketch2)
         arr_x2 = []
         exp_x = sum(sketch[0])/n
 
         for i in range(depth):
-            arr_x2.append(sum(np.divide(np.square(sketch[i]), collision_sketch[i])))
+            arr_x2.append(np.dot(sketch[i], sketch[i]))
 
-        corrected_sum = max(arr_x2)
-        exp_x2 = corrected_sum / n
+        exp_x2 = min(arr_x2) / n
 
-        return exp_x2 - exp_x**2
+        return exp_x2 - (exp_x**2), epsilon*n*(exp_x**2)
 
     # Broadcast original RDD, so that we can access the sketches later at every node
     sketch_rdd = rdd.map(lambda x: (x[0], vector_to_cms(x[1])))
@@ -231,20 +232,25 @@ def q4(spark_context: SparkContext, rdd: RDD, tau: float, epsilon: float, delta:
     # Create all triples by combining id_pairs with id_rdd
     id_triple = id_pairs.cartesian(id_rdd).filter(lambda x: x[0][1] < x[1])
 
+    # Sum pairs of sketches
+    sum_rdd = id_triple.map(lambda x: ((x[0][0], x[0][1], x[1]), sum_sketch(sketch_broadcast.value.get(x[0][0]), sketch_broadcast.value.get(x[0][1]))))
+
     # Compute the variance for all triples by summing the sketches and then compute the variance
-    variance_rdd = id_triple.map(lambda x: ((x[0][0], x[0][1], x[1]), variance(sketch_broadcast.value.get(x[0][0]), sketch_broadcast.value.get(x[0][1]), sketch_broadcast.value.get(x[1])))).cache()
+    variance_rdd = sum_rdd.map(lambda x: ((x[0][0], x[0][1], x[0][2]), variance(x[1], sketch_broadcast.value.get(x[0][2])))).cache()
 
     # Filter for the right tau
     if lower_than:
-        tau_variance_rdd = variance_rdd.filter(lambda x:  x[1] <= tau)
+        tau_variance_rdd = variance_rdd.filter(lambda x:  x[1][0]-x[1][1] <= tau)
     else:
-        tau_variance_rdd = variance_rdd.filter(lambda x: x[1] >= tau)
+        tau_variance_rdd = variance_rdd.filter(lambda x: x[1][0]-x[1][1] >= tau)
 
+    count = 0
     for element in tau_variance_rdd.collect():
         print(element)
+        count += 1
+    print(f'>>Number of triples is: {count}')
 
     return
-
 
 
 if __name__ == '__main__':
@@ -259,7 +265,11 @@ if __name__ == '__main__':
     # rdd = q1b(spark_context, on_server)
     # q3(spark_context, rdd, 410)
 
+    start = time.time()
     rdd = q1b(spark_context, on_server)
-    q4(spark_context, rdd, 410, 0.01, 0.1, True)
+    q4(spark_context, rdd, 200000, 0.0001, 0.1, False)
+    end = time.time()
+
+    print(end-start)
 
     spark_context.stop()
