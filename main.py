@@ -5,6 +5,7 @@ from pyspark.sql.functions import udf, split,  array, expr, pow, size, posexplod
 from pyspark.sql.types import ArrayType, DoubleType, FloatType
 import numpy as np
 import time
+import math
 
 def get_spark_context(on_server) -> SparkContext:
     spark_conf = SparkConf().setAppName("2AMD15")
@@ -15,8 +16,6 @@ def get_spark_context(on_server) -> SparkContext:
     spark_context.setLogLevel("ERROR") # Remove
 
     if on_server:
-        # TODO: You may want to change ERROR to WARN to receive more info. For larger data sets, to not set the
-        # log level to anything below WARN, Spark will print too much information.
         spark_context.setLogLevel("ERROR")
 
     return spark_context
@@ -185,92 +184,74 @@ def q3(spark_context: SparkContext, rdd: RDD, tau: float):
     return
 
 
-def q4(spark_context: SparkContext, rdd: RDD, tau: float):
+def q4(spark_context: SparkContext, rdd: RDD, tau: float, epsilon: float, delta: float, lower_than: bool):
     n = 10000
-    depth = 15
-    width = 250
+    depth = int(np.ceil(math.log(1/delta)))
+    width = int(np.ceil(math.e/epsilon))
 
-    # Compute the mean of each vector
-    def mean(v):
-        return sum(v) / n
-
-    # Compute the variance of each vector
-    def variance(v, m):
-        value = 0
-        for i in range(len(v)):
-            value += v[i]*v[i]
-        return (value / n) - (m*m)
-
-    def cov(tuple1, tuple2):
-        sketch1 = tuple1[0]
-        sketch2 = tuple2[0]
-        avg1 = tuple1[1]
-        avg2 = tuple2[1]
-
-        values = []
-
-        for i in range(depth):
-            value = 0
-            for j in range(width):
-                value += sketch1[i][j]*sketch2[i][j]
-            values.append(value)
-
-        exp_xy = min(values)
-
-        return (exp_xy/n) - (avg1 * avg2)
-
-    def variance_triple(var1, var2, var3, cov1, cov2, cov3):
-        return var1 + var2 + var3 + 2*(cov1 + cov2 + cov3)
+    primes = [3079, 6151, 12289, 24593, 49157, 98317, 196613, 393241, 786433, 1572869, 3145739, 6291469, 12582917,
+              25165843, 50331653, 100663319, 201326611, 402653189, 805306457, 1610612741]
 
     def vector_to_cms(vector):
         # Initialize the count min sketch with zeros.
         count_min_sketch = np.zeros((depth, width))
-
 
         # For each non-zero element in the vector, update the count min sketch.
         for i in range(len(vector)):
             value = vector[i]
 
             for j in range(depth):
-                hash_value = hash(str(i) + str(j)) % width
+                hash_value = hash(str(i) + 'A' + str(j)) % primes[j] % width
                 count_min_sketch[j][hash_value] += value
 
         return count_min_sketch
 
-    # Broadcast original RDD, so that we can access the vectors later at every node
+    def sum_sketch(sketch1, sketch2):
+        return np.add(sketch1, sketch2)
+
+
+    def variance(sketch1, sketch2):
+        sketch = np.add(sketch1, sketch2)
+        arr_x2 = []
+        exp_x = sum(sketch[0])/n
+
+        for i in range(depth):
+            arr_x2.append(np.dot(sketch[i], sketch[i]))
+
+        exp_x2 = min(arr_x2) / n
+
+        return exp_x2 - (exp_x**2), epsilon*n*(exp_x**2)
+
+    # Broadcast original RDD, so that we can access the sketches later at every node
     sketch_rdd = rdd.map(lambda x: (x[0], vector_to_cms(x[1])))
     sketch_broadcast = spark_context.broadcast(sketch_rdd.collectAsMap())
 
-    # Compute rdd with ID, mean and variance (drop the vector)
-    mean_rdd = rdd.map(lambda x: (x[0], (x[1], mean(x[1]))))
-    variance_rdd = mean_rdd.map(lambda x: (x[0], (variance(x[1][0], x[1][1]), x[1][1]))).cache()
+    # Compute rdd with ID
+    id_rdd = rdd.map(lambda x: (x[0])).cache()
 
-    # Create all unique pairs by computing cartesian product on variance rdd
-    id_pairs = variance_rdd.cartesian(variance_rdd).filter(lambda x: x[0] < x[1])
+    # Create all unique pairs by computing cartesian product on id rdd
+    id_pairs = id_rdd.cartesian(id_rdd).filter(lambda x: x[0] < x[1])
 
-    # Compute covariance for all the pairs using the broadcasted vectors
-    cov_rdd = id_pairs.map(lambda x: ((x[0][0]), (x[1][0], x[0][1][0], x[1][1][0], cov((sketch_broadcast.value.get(x[0][0]), x[0][1][1]), (sketch_broadcast.value.get(x[1][0]), x[1][1][1]))))).cache()
+    # Create all triples by combining id_pairs with id_rdd
+    id_triple = id_pairs.cartesian(id_rdd).filter(lambda x: x[0][1] < x[1])
 
-    # Create all triples -- ((X), (Y, varX, varY, covXY), (Z, varX, varZ, covXZ))
-    triple_rdd = cov_rdd.join(cov_rdd).filter(lambda x: x[1][0][0] < x[1][1][0])
+    # Sum pairs of sketches
+    sum_rdd = id_triple.map(lambda x: ((x[0][0], x[0][1], x[1]), sum_sketch(sketch_broadcast.value.get(x[0][0]), sketch_broadcast.value.get(x[0][1]))))
 
-    # Make sure all cov are in the triples
-    triple_cov = cov_rdd.map(lambda x: ((x[0], x[1][0]), x[1][3]))
-    triple_rdd2 = triple_rdd.map(lambda x: ((x[1][0][0], x[1][1][0]), ((x[0], x[1][0][1], x[1][0][2], x[1][1][2]), (x[1][0][3], x[1][1][3]))))
+    # Compute the variance for all triples by summing the sketches and then compute the variance
+    variance_rdd = sum_rdd.map(lambda x: ((x[0][0], x[0][1], x[0][2]), variance(x[1], sketch_broadcast.value.get(x[0][2])))).cache()
 
-    triple_complete_rdd = triple_rdd2.join(triple_cov)
+    # Filter for the right tau
+    if lower_than:
+        tau_variance_rdd = variance_rdd.filter(lambda x:  x[1][0]-x[1][1] <= tau)
+    else:
+        tau_variance_rdd = variance_rdd.filter(lambda x: x[1][0]-x[1][1] >= tau)
 
-    # Compute variance
-    final1_result = triple_complete_rdd.map(lambda x: ((x[0][0], x[0][1], x[1][0][0][0]), (variance_triple(x[1][0][0][1], x[1][0][0][2], x[1][0][0][3], x[1][0][1][0], x[1][0][1][1], x[1][1])))).cache()
-
-    # Filter for tau
-    final_result = final1_result.filter(lambda x: x[1] <= tau)
-
-    x = 1
-    for element in final1_result.collect():
-        if x < 3:
-            print(element)
-            x+=1
+    count = 0
+    for element in tau_variance_rdd.collect():
+        print(element)
+        count += 1
+    print(f'>>Number of triples is: {count}')
 
     return
 
@@ -284,10 +265,10 @@ if __name__ == '__main__':
     result = q2(spark_context, data_frame, 410)
     result.show()
 
-    _, rdd = q1b(spark_context, on_server)
-    q3(spark_context, rdd, 410)
-
-    # rdd, _ = q1b(spark_context, on_server)
-    # q4(spark_context, rdd, 20410)
+    rdd_250, rdd_1000 = q1b(spark_context, on_server)
+    
+    q3(spark_context, rdd_1000, 410)
+    
+    q4(spark_context, rdd_250, 200000, 0.0001, 0.1, False)
 
     spark_context.stop()
